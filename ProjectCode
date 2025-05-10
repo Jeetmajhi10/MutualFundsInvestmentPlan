@@ -1,0 +1,681 @@
+pip install pandas
+pip install matplotlib
+pip install seaborn
+pip install yfinance
+pip install openpyxl
+pip install xgboost
+pip install sklearn
+
+import yfinance as yf
+import pandas as pd
+import seaborn as sns
+import matplotlib.pyplot as plt
+from sklearn.model_selection import TimeSeriesSplit
+import xgboost as xgb
+from sklearn.metrics import mean_squared_error, r2_score
+
+stock_symbols = ["ADANIENT.NS", "ADANIPORTS.NS", "APOLLOHOSP.NS", "ASIANPAINT.NS", "AXISBANK.NS",
+"BAJAJ-AUTO.NS", "BAJFINANCE.NS", "BAJAJFINSV.NS", "BHARTIARTL.NS", "BPCL.NS",
+"BRITANNIA.NS", "CIPLA.NS", "COALINDIA.NS", "DIVISLAB.NS", "DRREDDY.NS", "EICHERMOT.NS",
+"GRASIM.NS", "HCLTECH.NS", "HDFC.NS", "HDFCBANK.NS", "HDFCLIFE.NS", "HEROMOTOCO.NS",
+"HINDALCO.NS", "HINDUNILVR.NS", "ICICIBANK.NS", "INDUSINDBK.NS", "INFY.NS", "ITC.NS",
+"JSWSTEEL.NS", "KOTAKBANK.NS", "LT.NS", "M&M.NS", "MARUTI.NS", "NESTLEIND.NS",
+"NTPC.NS", "ONGC.NS", "POWERGRID.NS", "RELIANCE.NS", "SBILIFE.NS", "SBIN.NS",
+"SHREECEM.NS", "SUNPHARMA.NS", "TATACONSUM.NS", "TATAMOTORS.NS", "TATASTEEL.NS",
+"TCS.NS", "TECHM.NS", "TITAN.NS", "UPL.NS", "ULTRACEMCO.NS", "WIPRO.NS",
+"ADANIPOWER.NS", "AMBUJACEM.NS", "AUROPHARMA.NS", "BALKRISIND.NS", "BANDHANBNK.NS",
+"BANKBARODA.NS", "BIOCON.NS", "CHOLAFIN.NS", "CONCOR.NS", "DLF.NS", "GAIL.NS",
+"GODREJCP.NS", "HAVELLS.NS", "HDFCAMC.NS", "IDEA.NS", "IDFCFIRSTB.NS", "IGL.NS",
+"INDIANB.NS", "INDIGO.NS", "JINDALSTEL.NS", "JUBLFOOD.NS", "LUPIN.NS",
+"MCDOWELL-N.NS", "MFSL.NS", "MINDTREE.NS", "MPHASIS.NS", "MRF.NS", "NHPC.NS",
+"NMDC.NS", "OFSS.NS", "PAGEIND.NS", "PEL.NS", "PFC.NS", "PIDILITIND.NS",
+"PNB.NS", "RBLBANK.NS", "RECLTD.NS", "SHOPERSTOP.NS", "SIEMENS.NS", "SRTRANSFIN.NS",
+"STRTECH.NS", "SUNTV.NS", "SYNGENE.NS", "TORNTPHARM.NS", "TORNTPOWER.NS",
+"TVSMOTOR.NS", "UJJIVANSFB.NS", "VEDL.NS", "ZEEL.NS"]
+all_data = {}
+
+for symbol in stock_symbols:
+    all_data[symbol] = yf.download(symbol, period="3y")
+
+# Combine data into a single DataFrame
+combined_data = pd.concat(
+    [data.add_prefix(f"{symbol}_") for symbol, data in all_data.items()],
+    axis=1
+)
+
+df = combined_data
+df['Date']=pd.to_datetime(df['Date'])
+columns_to_drop = [col for col in df.columns if any(s in col for s in ['High','Low','Open','Volume','Adj'])]
+filtered_df=df.drop(columns_to_drop,axis=1)
+col_with_null_val=filtered_df.columns[filtered_df.isnull().any()]
+data=filtered_df.drop(col_with_null_val,axis=1)
+numeric_cols=data.select_dtypes(include='number').columns
+data[numeric_cols]=data[numeric_cols].round(2)
+
+all_companies = data.columns[1:]
+returns = data[all_companies].pct_change()
+
+volatility_pct = returns.std() * 100
+volatility_pct = (
+    volatility_pct
+    .to_frame(name="Volatility (%)")
+    .sort_values("Volatility (%)", ascending=False)
+    .round(2)
+)
+avg_growth_pct = (
+    (returns * 100)                
+    .mean()
+    .to_frame(name="Average_Daily_Growth (%)")
+    .sort_values("Average_Daily_Growth (%)", ascending=False)
+    .round(3)
+)
+initial_prices = data.iloc[0, 1:]
+final_prices   = data.iloc[-1, 1:]
+roi_pct = ((final_prices - initial_prices) / initial_prices) * 100
+roi_pct = (
+    roi_pct
+    .to_frame(name="Total_ROI (%)")
+    .sort_values("Total_ROI (%)", ascending=False)
+    .round(2)
+)
+company_metrics_pct = pd.concat(
+    [volatility_pct, avg_growth_pct, roi_pct],
+    axis=1
+)
+company_metrics_pct['Company'] = all_companies
+company_metrics_pct.reset_index(drop=True, inplace=True)
+
+fb_columns = [col for col in all_companies if any(s in col for s in [ "AXISBANK.NS","HDFCBANK.NS","ICICIBANK.NS","INDUSINDBK.NS","KOTAKBANK.NS","IDFCFIRSTB.NS","RBLBANK.NS","BANKBARODA.NS",
+                                                                 "PNB.NS","SBIN.NS","INDIANB.NS","BAJFINANCE.NS","BAJAJFINSV.NS","CHOLAFIN.NS","HDFCLIFE.NS","SBILIFE.NS","MFSL.NS","RECLTD.NS",
+                                                                 "PFC.NS","HDFCAMC.NS","PEL.NS","SRTRANSFIN.NS","UJJIVANSFB.NS"])]
+f_b_data=clean_data[fb_columns]
+it_columns = [col for col in columns if any(s in col for s in ["HCLTECH.NS", "INFY.NS", "TCS.NS", "TECHM.NS", "WIPRO.NS", "MPHASIS.NS", "MINDTREE.NS", "OFSS.NS"])]
+it_data=clean_data[it_columns]
+ogp_columns = [col for col in columns if any(s in col for s in ["BPCL.NS", "ONGC.NS", "RELIANCE.NS", "GAIL.NS", "IGL.NS", "NTPC.NS", "POWERGRID.NS", "NHPC.NS", "TORNTPOWER.NS"])]
+ogp_data=clean_data[ogp_columns]
+auto_columns = [col for col in columns if any(s in col for s in ["BAJAJ-AUTO.NS", "EICHERMOT.NS", "HEROMOTOCO.NS", "M&M.NS", "MARUTI.NS", "TATAMOTORS.NS", "TVSMOTOR.NS", "BALKRISIND.NS", "MRF.NS"])]
+auto_data=clean_data[auto_columns]
+health_columns = [col for col in columns if any(s in col for s in ["APOLLOHOSP.NS", "CIPLA.NS", "DIVISLAB.NS", "DRREDDY.NS", "SUNPHARMA.NS", "AUROPHARMA.NS", "BIOCON.NS", "LUPIN.NS", "SYNGENE.NS", "TORNTPHARM.NS"])]
+health_data=clean_data[health_columns]
+fmcg_columns = [col for col in columns if any(s in col for s in ["ASIANPAINT.NS", "BRITANNIA.NS", "GODREJCP.NS", "HINDUNILVR.NS", "ITC.NS", "NESTLEIND.NS", "PIDILITIND.NS", "JUBLFOOD.NS", "MCDOWELL-N.NS"])]
+fmcg_data=clean_data[fmcg_columns]
+metal_columns = [col for col in columns if any(s in col for s in ["HINDALCO.NS", "JSWSTEEL.NS", "TATASTEEL.NS", "JINDALSTEL.NS", "NMDC.NS", "VEDL.NS"])]
+metal_data=clean_data[metal_columns]
+cem_build_columns = [col for col in columns if any(s in col for s in ["GRASIM.NS", "ULTRACEMCO.NS", "SHREECEM.NS", "AMBUJACEM.NS"])]
+cem_build_data=clean_data[cem_build_columns]
+real_est_columns = [col for col in columns if any(s in col for s in ["DLF.NS", "L&T.NS", "CONCOR.NS", "SIEMENS.NS"])]
+real_est_data=clean_data[real_est_columns]
+tel_columns = [col for col in columns if any(s in col for s in ['BHARTIARTL.NS','IDEA.NS','ZEEL.NS','SUNTV.NS','STRTECH.NS'])]
+tel_data=clean_data[Tel_columns]
+
+#Since it is not possible to fit model on all the stocks, I have handpicked 4 stocks on which model fitting will be done
+#AXISBANK
+fb_cols=f_b_data.columns[1:]
+rolling_roi_df = pd.DataFrame()
+
+for col in fb_cols:
+    rolling_roi = f_b_data[col].rolling(window=5).apply(lambda x: ((x.iloc[-1] - x.iloc[0]) / x.iloc[0]) * 100)
+    rolling_roi_df[f"{col}_RollingROI"] = rolling_roi
+
+for cols in fb_cols:
+  rolling_vol = f_b_data[cols].rolling(window=5).std()
+  rolling_roi_df[f"{cols}_RollingVol"] = rolling_vol
+
+f_b_data=pd.concat([f_b_data,rolling_roi_df],axis=1)
+
+AXIS = f_b_data[['Date','AXISBANK.NS_Close','AXISBANK.NS_Close_RollingROI','AXISBANK.NS_Close_RollingVol']]
+AXIS=AXIS.rename(columns={'AXISBANK.NS_Close':'AXIS_Closing_price','AXISBANK.NS_Close_RollingROI':'AXISBANK_rollingROI','AXISBANK.NS_Close_RollingVol':'AXISBANK_rollingVol'})
+
+tss = TimeSeriesSplit(n_splits=4,gap=1)
+fig,ax=plt.subplots(4,1,sharex=True)
+folds=0
+plt.title('Train-test Cross Validation')
+
+for train_idx,val_idx in tss.split(AXIS):
+    train = AXIS.iloc[train_idx]
+    test = AXIS.iloc[val_idx]
+    train['AXIS_Closing_price'].plot(ax=ax[folds],ls='-',figsize=(12,8))
+    test['AXIS_Closing_price'].plot(ax=ax[folds],ls='-')
+    ax[folds].axvline(test.index[0],ls='--',color='black',alpha=0.5)
+    folds+=1
+
+def create_features(AXIS):
+  AXIS = AXIS.copy()
+  AXIS['quarter'] = AXIS['Date'].dt.quarter
+  AXIS['month'] = AXIS['Date'].dt.month
+  AXIS['year'] = AXIS['Date'].dt.year
+  AXIS['dayofyear'] = AXIS['Date'].dt.dayofyear
+  AXIS['dayofmonth'] = AXIS['Date'].dt.day
+  AXIS['weekofyear'] = AXIS['Date'].dt.isocalendar().week
+  return AXIS
+AXIS=create_features(AXIS)
+def add_lags(AXIS):
+  AXIS['Lag_1']=AXIS['AXIS_Closing_price'].shift(1)
+  AXIS['Lag_2']=AXIS['AXIS_Closing_price'].shift(5)
+  AXIS['Lag_3']=AXIS['AXIS_Closing_price'].shift(10)
+  AXIS['Lag_4']=AXIS['AXIS_Closing_price'].shift(30)
+  return AXIS
+AXIS=add_lags(AXIS)
+def return_and_avg(AXIS):
+  AXIS['moving_avg_1']=AXIS['AXIS_Closing_price'].rolling(window=5).mean()
+  AXIS['moving_avg_2']=AXIS['AXIS_Closing_price'].rolling(window=21).mean()
+  AXIS['return_5'] = AXIS['AXIS_Closing_price'].pct_change(5)
+  AXIS['return_10'] = AXIS['AXIS_Closing_price'].pct_change(10)
+  return AXIS
+AXIS=return_and_avg(AXIS)
+
+tss = TimeSeriesSplit(n_splits=4,gap=1)
+preds_AXIS=[]
+scores_AXIS=[]
+fold=0
+for train_idx, val_idx in tss.split(AXIS):
+    train = AXIS.iloc[train_idx]
+    test = AXIS.iloc[val_idx]
+
+    train = create_features(train)
+    test = create_features(test)
+
+    FEATURES = ['quarter', 'month', 'year', 'dayofyear', 'dayofmonth','weekofyear','AXISBANK_rollingROI', 'AXISBANK_rollingVol','Lag_1',
+            'Lag_2','Lag_3','Lag_4','moving_avg_1','moving_avg_2','return_5','return_10']
+    TARGET = 'AXIS_Closing_price'
+
+    X_train=train[FEATURES]
+    Y_train=train[TARGET]
+
+    X_test=test[FEATURES]
+    Y_test=test[TARGET]
+
+    reg=xgb.XGBRegressor(base_score=0.5,booster='gbtree',n_estimators=1000,early_stopping_rounds=50,objective='reg:squarederror',
+                         max_depth=3,learning_rate=0.01)
+    reg.fit(X_train,Y_train,eval_set=[(X_train,Y_train),(X_test,Y_test)],verbose=None)
+
+    y_pred = reg.predict(X_test)
+    preds_AXIS.append(y_pred)
+    score=np.sqrt(mean_squared_error(Y_test,y_pred))
+    scores_AXIS.append(score)
+
+print(f'Score across folds {np.mean(scores_AXIS):0.4f}')
+print(f'Fold scores:{scores_AXIS}')
+
+corr_matrix = X_train.corr()
+plt.figure(figsize=(12, 8))
+sns.heatmap(corr_matrix, annot=True, fmt=".2f", cmap="coolwarm", linewidths=0.5, square=True)
+plt.title("Feature Correlation Heatmap", fontsize=16, fontweight='bold')
+plt.xticks(rotation=45, ha='right')
+plt.tight_layout()
+plt.show()
+
+xgb.plot_importance(reg, max_num_features=10, importance_type='gain', height=0.5, title='Top 10 Important Features')
+plt.show()
+
+sns.set_style("whitegrid")
+
+# Set figure size and resolution
+plt.figure(figsize=(12, 6), dpi=100)
+
+# Plot actual and predicted lines with enhanced styling
+pred = reg.predict(X_test)
+test['predictions'] = pred
+plt.plot(test['AXIS_Closing_price'], label='Actual Data', color='#1f77b4', linewidth=2)
+plt.plot(test['predictions'], label='Predictions', color='#ff7f0e', linestyle='--', linewidth=2)
+
+# Add a title and axis labels with better formatting
+plt.title('AXISBANK Actual vs Prediction', fontsize=16, fontweight='bold')
+plt.xlabel('Time Index', fontsize=12)
+plt.ylabel('Stock Price (INR)', fontsize=12)
+
+# Add legend with fancy styling
+plt.legend(loc='best', fontsize=11, fancybox=True, shadow=True)
+
+# Tight layout and grid
+plt.tight_layout()
+plt.grid(True, linestyle='--', alpha=0.6)
+
+# Calculate Mean Squared Error (MSE)
+mse = mean_squared_error(Y_test, pred)
+print(f"Mean Squared Error: {mse}")
+
+# Calculate R-squared (R2)
+r2 = r2_score(Y_test, pred)
+print(Y_test.shape)
+print(f"R-squared: {r2}")
+
+#TCS
+it_cols=it_data.columns[1:]
+rolling_df2 = pd.DataFrame()
+
+for cols in it_cols:
+    rolling_roi1 = it_data[cols].rolling(window=5).apply(lambda x: ((x.iloc[-1] - x.iloc[0]) / x.iloc[0]) * 100)
+    rolling_df2[f"{cols}_RollingROI"] = rolling_roi1
+
+for cols in it_cols:
+  rolling_vol1 = it_data[cols].rolling(window=5).std()
+  rolling_df2[f"{cols}_RollingVol"] = rolling_vol1
+
+it_data=pd.concat([it_data,rolling_df2],axis=1)
+
+TCS = it_data[['Date','TCS.NS_Close','TCS.NS_Close_RollingROI','TCS.NS_Close_RollingVol']]
+TCS=TCS.rename(columns={'TCS.NS_Close':'TCS_Closing_price','TCS.NS_Close_RollingROI':'TCS_rollingROI','TCS.NS_Close_RollingVol':'TCS_rollingVol'})
+
+train_1 = TCS.loc[TCS["Date"] < "06-03-2024"]
+test_1 = TCS.loc[TCS["Date"] >= "06-03-2024"]
+
+def create_features1(TCS):
+    TCS = TCS.copy()
+    TCS["quarter"] = TCS["Date"].dt.quarter
+    TCS["month"] = TCS["Date"].dt.month
+    TCS["year"] = TCS["Date"].dt.year
+    TCS["dayofyear"] = TCS["Date"].dt.dayofyear
+    TCS["dayofmonth"] = TCS["Date"].dt.day
+    TCS["weekofyear"] = TCS["Date"].dt.isocalendar().week
+    return TCS
+
+TCS = create_features1(TCS)
+
+
+def add_lags1(TCS):
+    TCS["Lag_1"] = TCS["TCS_Closing_price"].shift(1)
+    TCS["Lag_2"] = TCS["TCS_Closing_price"].shift(5)
+    TCS["Lag_3"] = TCS["TCS_Closing_price"].shift(10)
+    TCS["Lag_4"] = TCS["TCS_Closing_price"].shift(30)
+    return TCS
+
+TCS = add_lags1(TCS)
+
+
+def return_and_avg1(TCS):
+    TCS["moving_avg_1"] = TCS["TCS_Closing_price"].rolling(window=5).mean()
+    TCS["moving_avg_2"] = TCS["TCS_Closing_price"].rolling(window=21).mean()
+    TCS["return_5"] = TCS["TCS_Closing_price"].pct_change(5)
+    TCS["return_10"] = TCS["TCS_Closing_price"].pct_change(10)
+    return TCS
+
+TCS = return_and_avg1(TCS)
+import xgboost as xgb
+
+tss1 = TimeSeriesSplit(n_splits=4,gap=1)
+
+preds_TCS=[]
+scores_TCS=[]
+fold = 0
+for train_idx, val_idx in tss1.split(TCS):
+    train_1 = TCS.iloc[train_idx]
+    test_1 = TCS.iloc[val_idx]
+
+    train_1 = create_features1(train_1)
+    test_1 = create_features1(test_1)
+
+    FEATURES = ["quarter","month","year","dayofyear","dayofmonth","weekofyear","TCS_rollingROI","TCS_rollingVol","Lag_1","Lag_2",
+                "Lag_3","Lag_4","moving_avg_1","moving_avg_2","return_5","return_10",]
+    TARGET = "TCS_Closing_price"
+
+    X_train1 = train_1[FEATURES]
+    Y_train1 = train_1[TARGET]
+
+    X_test1 = test_1[FEATURES]
+    Y_test1 = test_1[TARGET]
+
+    reg1 = xgb.XGBRegressor(
+        base_score=0.5,
+        booster="gbtree",
+        n_estimators=1000,
+        early_stopping_rounds=50,
+        objective="reg:squarederror",
+        max_depth=3,
+        learning_rate=0.01,
+    )
+    reg1.fit(X_train1, Y_train1, eval_set=[(X_train1, Y_train1), (X_test1, Y_test1)], verbose=None)
+    y_pred1 = reg1.predict(X_test1)
+    preds_TCS.append(y_pred1)
+    score1=np.sqrt(mean_squared_error(Y_test1,y_pred1))
+    scores_TCS.append(score1)
+
+print(f'Score across folds {np.mean(scores_TCS):0.4f}')
+print(f'Fold scores:{scores_TCS}')
+
+corr_matrix2 = X_train1.corr()
+plt.figure(figsize=(12, 8))
+sns.heatmap(corr_matrix2, annot=True, fmt=".2f", cmap="coolwarm", linewidths=0.5, square=True)
+plt.title("Feature Correlation Heatmap", fontsize=16, fontweight='bold')
+plt.xticks(rotation=45, ha='right')
+plt.tight_layout()
+plt.show()
+
+xgb.plot_importance(reg1, max_num_features=10, importance_type='gain', height=0.5, title='Top 10 Important Features')
+plt.show()
+
+sns.set_style("whitegrid")
+
+# Set figure size and resolution
+plt.figure(figsize=(12, 6), dpi=100)
+
+# Plot actual and predicted lines with enhanced styling
+pred2 = reg1.predict(X_test1)
+test_1['predictions'] = pred2
+plt.plot(test_1['TCS_Closing_price'], label='Actual Data', color='#1f77b4', linewidth=2)
+plt.plot(test_1['predictions'], label='Predictions', color='#ff7f0e', linestyle='--', linewidth=2)
+
+# Add a title and axis labels with better formatting
+plt.title('TCS Actual vs Prediction', fontsize=16, fontweight='bold')
+plt.xlabel('Time Index', fontsize=12)
+plt.ylabel('Stock Price (INR)', fontsize=12)
+
+# Add legend with fancy styling
+plt.legend(loc='best', fontsize=11, fancybox=True, shadow=True)
+
+# Tight layout and grid
+plt.tight_layout()
+plt.grid(True, linestyle='--', alpha=0.6)
+
+from sklearn.metrics import mean_squared_error, r2_score
+# Calculate Mean Squared Error (MSE)
+mse = mean_squared_error(Y_test1, pred2)
+print(f"Mean Squared Error: {mse}")
+# Calculate R-squared (R2)
+r2 = r2_score(Y_test1, pred2)
+print(f"R-squared: {r2}")
+
+#MRF
+auto_cols=auto_data.columns[1:]
+rolling_df3 = pd.DataFrame()
+
+for colum in auto_cols:
+    rolling_roi2 = auto_data[colum].rolling(window=5).apply(lambda x: ((x.iloc[-1] - x.iloc[0]) / x.iloc[0]) * 100)
+    rolling_df3[f"{colum}_RollingROI"] = rolling_roi2
+
+for colum in auto_cols:
+  rolling_vol2 = auto_data[colum].rolling(window=5).std()
+  rolling_df3[f"{colum}_RollingVol"] = rolling_vol2
+
+auto_data=pd.concat([auto_data,rolling_df3],axis=1)
+MRF = auto_data[['Date','MRF.NS_Close','MRF.NS_Close_RollingROI','MRF.NS_Close_RollingVol']]
+MRF=MRF.rename(columns={'MRF.NS_Close':'MRF_Closing_price','MRF.NS_Close_RollingROI':'MRF_rollingROI','MRF.NS_Close_RollingVol':'MRF_rollingVol'})
+
+train2 = MRF.loc[MRF["Date"] < "06-03-2024"]
+test2 = MRF.loc[MRF["Date"] >= "06-03-2024"]
+
+
+def create_features2(MRF):
+    MRF = MRF.copy()
+    MRF["quarter"] = MRF["Date"].dt.quarter
+    MRF["month"] = MRF["Date"].dt.month
+    MRF["year"] = MRF["Date"].dt.year
+    MRF["dayofyear"] = MRF["Date"].dt.dayofyear
+    MRF["dayofmonth"] = MRF["Date"].dt.day
+    MRF["weekofyear"] = MRF["Date"].dt.isocalendar().week
+    return MRF
+
+MRF = create_features2(MRF)
+
+def add_lags2(MRF):
+    MRF["Lag_1"] = MRF["MRF_Closing_price"].shift(1)
+    MRF["Lag_2"] = MRF["MRF_Closing_price"].shift(5)
+    MRF["Lag_3"] = MRF["MRF_Closing_price"].shift(10)
+    MRF["Lag_4"] = MRF["MRF_Closing_price"].shift(30)
+    return MRF
+
+MRF = add_lags2(MRF)
+
+def return_and_avg2(MRF):
+    MRF["moving_avg_1"] = MRF["MRF_Closing_price"].rolling(window=5).mean()
+    MRF["moving_avg_2"] = MRF["MRF_Closing_price"].rolling(window=21).mean()
+    MRF["return_5"] = MRF["MRF_Closing_price"].pct_change(5)
+    MRF["return_10"] = MRF["MRF_Closing_price"].pct_change(10)
+    return MRF
+
+MRF = return_and_avg2(MRF)
+
+import xgboost as xgb
+
+tss2 = TimeSeriesSplit(n_splits=4,gap=1)
+
+preds_MRF=[]
+scores_MRF=[]
+fold = 0
+for train_idx, val_idx in tss2.split(MRF):
+    train2 = MRF.iloc[train_idx]
+    test2 = MRF.iloc[val_idx]
+
+    train2 = create_features(train2)
+    test2 = create_features(test2)
+
+    FEATURES = ["quarter","month","year","dayofyear","dayofmonth","weekofyear","MRF_rollingROI","MRF_rollingVol","Lag_1","Lag_2","Lag_3","Lag_4","moving_avg_1","moving_avg_2",
+                "return_5","return_10",]
+    TARGET = "MRF_Closing_price"
+
+    X_train2 = train2[FEATURES]
+    Y_train2 = train2[TARGET]
+
+    X_test2 = test2[FEATURES]
+    Y_test2 = test2[TARGET]
+
+    reg2 = xgb.XGBRegressor(
+        base_score=0.5,
+        booster="gbtree",
+        n_estimators=1000,
+        early_stopping_rounds=50,
+        objective="reg:squarederror",
+        max_depth=3,
+        learning_rate=0.01,
+    )
+    reg2.fit(X_train2, Y_train2, eval_set=[(X_train2, Y_train2), (X_test2, Y_test2)], verbose=None)
+    y_pred2 = reg2.predict(X_test2)
+    preds_MRF.append(y_pred2)
+    score2=np.sqrt(mean_squared_error(Y_test2,y_pred2))
+    scores_MRF.append(score2)
+
+print(f'Score across folds {np.mean(scores_MRF):0.4f}')
+print(f'Fold scores:{scores_MRF}')
+
+corr_matrix4 = X_train2.corr()
+plt.figure(figsize=(12, 8))
+sns.heatmap(corr_matrix4, annot=True, fmt=".2f", cmap="coolwarm", linewidths=0.5, square=True)
+plt.title("Feature Correlation Heatmap", fontsize=16, fontweight='bold')
+plt.xticks(rotation=45, ha='right')
+plt.tight_layout()
+plt.show()
+
+xgb.plot_importance(reg2, max_num_features=10, importance_type='gain', height=0.5, title='Top 10 Important Features')
+plt.show()
+
+sns.set_style("whitegrid")
+
+# Set figure size and resolution
+plt.figure(figsize=(12, 6), dpi=100)
+
+# Plot actual and predicted lines with enhanced styling
+pred3 = reg2.predict(X_test2)
+test2['predictions'] = pred3
+plt.plot(test2['MRF_Closing_price'], label='Actual Data', color='#1f77b4', linewidth=2)
+plt.plot(test2['predictions'], label='Predictions', color='#ff7f0e', linestyle='--', linewidth=2)
+
+# Add a title and axis labels with better formatting
+plt.title('MRF Actual vs Prediction', fontsize=16, fontweight='bold')
+plt.xlabel('Time Index', fontsize=12)
+plt.ylabel('Stock Price (INR)', fontsize=12)
+
+# Add legend with fancy styling
+plt.legend(loc='best', fontsize=11, fancybox=True, shadow=True)
+
+# Tight layout and grid
+plt.tight_layout()
+plt.grid(True, linestyle='--', alpha=0.6)
+
+from sklearn.metrics import mean_squared_error, r2_score
+
+# Calculate Mean Squared Error (MSE)
+mse = mean_squared_error(Y_test2, pred3)
+print(f"Mean Squared Error: {mse}")
+
+# Calculate R-squared (R2)
+r2 = r2_score(Y_test2, pred3)
+print(f"R-squared: {r2}")
+
+#RELIANCE
+ogp_cols=ogp_data.columns[1:]
+rolling_df4 = pd.DataFrame()
+
+for colums in ogp_cols:
+    rolling_roi3 = ogp_data[colums].rolling(window=5).apply(lambda x: ((x.iloc[-1] - x.iloc[0]) / x.iloc[0]) * 100)
+    rolling_df4[f"{colums}_RollingROI"] = rolling_roi3
+
+for colums in ogp_cols:
+  rolling_vol3 = ogp_data[colums].rolling(window=5).std()
+  rolling_df4[f"{colums}_RollingVol"] = rolling_vol3
+
+ogp_data=pd.concat([ogp_data,rolling_df4],axis=1)
+RELIANCE = ogp_data[['Date','RELIANCE.NS_Close','RELIANCE.NS_Close_RollingROI','RELIANCE.NS_Close_RollingVol']]
+RELIANCE=RELIANCE.rename(columns={'RELIANCE.NS_Close':'RELIANCE_Closing_price','RELIANCE.NS_Close_RollingROI':'RELIANCE_rollingROI','RELIANCE.NS_Close_RollingVol':'RELIANCE_rollingVol'})
+
+train3 = RELIANCE.loc[RELIANCE["Date"] < "06-03-2024"]
+test3 = RELIANCE.loc[RELIANCE["Date"] >= "06-03-2024"]
+
+
+def create_features3(RELIANCE):
+    RELIANCE = RELIANCE.copy()
+    RELIANCE["quarter"] = RELIANCE["Date"].dt.quarter
+    RELIANCE["month"] = RELIANCE["Date"].dt.month
+    RELIANCE["year"] = RELIANCE["Date"].dt.year
+    RELIANCE["dayofyear"] = RELIANCE["Date"].dt.dayofyear
+    RELIANCE["dayofmonth"] = RELIANCE["Date"].dt.day
+    RELIANCE["weekofyear"] = RELIANCE["Date"].dt.isocalendar().week
+    return RELIANCE
+
+RELIANCE = create_features3(RELIANCE)
+
+def add_lags3(RELIANCE):
+    RELIANCE["Lag_1"] = RELIANCE["RELIANCE_Closing_price"].shift(1)
+    RELIANCE["Lag_2"] = RELIANCE["RELIANCE_Closing_price"].shift(5)
+    RELIANCE["Lag_3"] = RELIANCE["RELIANCE_Closing_price"].shift(10)
+    RELIANCE["Lag_4"] = RELIANCE["RELIANCE_Closing_price"].shift(30)
+    return RELIANCE
+
+RELIANCE = add_lags3(RELIANCE)
+
+def return_and_avg3(RELIANCE):
+    RELIANCE["moving_avg_1"] = RELIANCE["RELIANCE_Closing_price"].rolling(window=5).mean()
+    RELIANCE["moving_avg_2"] = RELIANCE["RELIANCE_Closing_price"].rolling(window=21).mean()
+    RELIANCE["return_5"] = RELIANCE["RELIANCE_Closing_price"].pct_change(5)
+    RELIANCE["return_10"] = RELIANCE["RELIANCE_Closing_price"].pct_change(10)
+    return RELIANCE
+
+RELIANCE = return_and_avg3(RELIANCE)
+
+import xgboost as xgb
+
+tss3 = TimeSeriesSplit(n_splits=4,gap=1)
+
+preds_REL=[]
+scores_REL=[]
+fold = 0
+for train_idx, val_idx in tss3.split(RELIANCE):
+    train3 = RELIANCE.iloc[train_idx]
+    test3 = RELIANCE.iloc[val_idx]
+
+    train3 = create_features3(train3)
+    test3 = create_features3(test3)
+
+    FEATURES = ["quarter","month","year","dayofyear","dayofmonth","weekofyear","RELIANCE_rollingROI","RELIANCE_rollingVol","Lag_1","Lag_2","Lag_3",
+                "Lag_4","moving_avg_1","moving_avg_2","return_5","return_10"]
+    TARGET = "RELIANCE_Closing_price"
+
+    X_train3 = train3[FEATURES]
+    Y_train3 = train3[TARGET]
+
+    X_test3 = test3[FEATURES]
+    Y_test3 = test3[TARGET]
+
+    reg3 = xgb.XGBRegressor(
+        base_score=0.5,
+        booster="gbtree",
+        n_estimators=1000,
+        early_stopping_rounds=50,
+        objective="reg:squarederror",
+        max_depth=3,
+        learning_rate=0.01,
+    )
+    reg3.fit(X_train3, Y_train3, eval_set=[(X_train3, Y_train3), (X_test3, Y_test3)], verbose=None)
+    y_pred3 = reg3.predict(X_test3)
+    preds_REL.append(y_pred3)
+    score3=np.sqrt(mean_squared_error(Y_test3,y_pred3))
+    scores_REL.append(score3)
+
+print(f'Score across folds {np.mean(scores_REL):0.4f}')
+print(f'Fold scores:{scores_REL}')
+
+corr_matrix5 = X_train3.corr()
+plt.figure(figsize=(12, 8))
+sns.heatmap(corr_matrix5, annot=True, fmt=".2f", cmap="coolwarm", linewidths=0.5, square=True)
+plt.title("Feature Correlation Heatmap", fontsize=16, fontweight='bold')
+plt.xticks(rotation=45, ha='right')
+plt.tight_layout()
+plt.show()
+
+xgb.plot_importance(reg3, max_num_features=10, importance_type='gain', height=0.5, title='Top 10 Important Features')
+plt.show()
+
+sns.set_style("whitegrid")
+
+# Set figure size and resolution
+plt.figure(figsize=(12, 6), dpi=100)
+
+# Plot actual and predicted lines with enhanced styling
+pred4 = reg3.predict(X_test3)
+test3['predictions'] = pred4
+plt.plot(test3['RELIANCE_Closing_price'], label='Actual Data', color='#1f77b4', linewidth=2)
+plt.plot(test3['predictions'], label='Predictions', color='#ff7f0e', linestyle='--', linewidth=2)
+
+# Add a title and axis labels with better formatting
+plt.title('RELIANCE Actual vs Prediction', fontsize=16, fontweight='bold')
+plt.xlabel('Time Index', fontsize=12)
+plt.ylabel('Stock Price (INR)', fontsize=12)
+
+# Add legend with fancy styling
+plt.legend(loc='best', fontsize=11, fancybox=True, shadow=True)
+
+# Tight layout and grid
+plt.tight_layout()
+plt.grid(True, linestyle='--', alpha=0.6)
+
+from sklearn.metrics import mean_squared_error, r2_score
+
+# Calculate Mean Squared Error (MSE)
+mse = mean_squared_error(Y_test3, pred4)
+print(f"Mean Squared Error: {mse}")
+
+# Calculate R-squared (R2)
+r2 = r2_score(Y_test3, pred4)
+print(f"R-squared: {r2}")
+
+sns.set_style("whitegrid")
+
+# Set figure size and resolution
+plt.figure(figsize=(12, 6), dpi=100)
+
+# Plot actual and predicted lines with enhanced styling
+pred4 = reg3.predict(X_test3)
+test3['predictions'] = pred4
+plt.plot(test3['RELIANCE_Closing_price'], label='Actual Data', color='#1f77b4', linewidth=2)
+plt.plot(test3['predictions'], label='Predictions', color='#ff7f0e', linestyle='--', linewidth=2)
+
+# Add a title and axis labels with better formatting
+plt.title('RELIANCE Actual vs Prediction', fontsize=16, fontweight='bold')
+plt.xlabel('Time Index', fontsize=12)
+plt.ylabel('Stock Price (INR)', fontsize=12)
+
+# Add legend with fancy styling
+plt.legend(loc='best', fontsize=11, fancybox=True, shadow=True)
+
+# Tight layout and grid
+plt.tight_layout()
+plt.grid(True, linestyle='--', alpha=0.6)
+
+from sklearn.metrics import mean_squared_error, r2_score
+
+# Calculate Mean Squared Error (MSE)
+mse = mean_squared_error(Y_test3, pred4)
+print(f"Mean Squared Error: {mse}")
+
+# Calculate R-squared (R2)
+r2 = r2_score(Y_test3, pred4)
+print(f"R-squared: {r2}")
